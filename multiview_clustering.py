@@ -22,7 +22,9 @@ from nltk.corpus import wordnet
 
 #import addcos
 #from settings import SETTINGS
+from sklearn.linear_model import LogisticRegression
 
+import compute_distances
 import bcubed_evaluation
 
 bug_list = [
@@ -60,10 +62,11 @@ def flatten(l):
 
 
 class TargetParaphrases:
-    def __init__(self, word, pos):
+    def __init__(self, word, pos, paraphrase): #Added the 4th parameter paraphrase
         self.baseword = word
         self.pos = pos
-        self.paraphrases = bug_list
+        self.paraphrase = paraphrase #Added this
+        self.paraphrases = os.listdir('features/' + paraphrase) ##CHANGE THIS FOR DIFFERENT PARAPHRASES
         self.paraphrases_vecs = None
         self.paraphrases_vecs_norm = None
         self.pp_pp_mat = None  # PPDB 2.0 Score
@@ -269,7 +272,7 @@ class TargetParaphrases:
 
     def cluster(self, imgfile, w2vfile, inc_pp_pp=False, inc_pp_syn=False, inc_pp_sent=False,
                 inc_pp_trans=False, inc_pp_distrib=False, inc_pp_images = True,
-                inc_pp_word2vec = True, fileprefix='.', choosek='silhouette'):
+                inc_pp_word2vec = True, fileprefix='.', choosek='silhouette', image_weight = 0.5):
         '''
         Use Multi-view Nonnegative Matrix Factorization to cluster along
         multiple views:
@@ -423,8 +426,10 @@ class TargetParaphrases:
                 'Could not get best K for target %s based on NMI (maybe no overlapping words?). Defaulting to number of WordNet synsets.\n' % self.baseword)
             poslookup = {'N': 'n', 'V': 'v', 'R': 'r', 'J': 'a'}
             #k = min(max(2, len(imgfile[0]) - 1), len(wordnet.synsets(self.baseword, poslookup[self.pos[0]])))
-            k = 6
-            __ = octave.run_MultiNMF(k, inputfile, outputfile)
+            k_image = compute_distances.find_k_pca(np.load('affinity_matrices/' + self.paraphrase + '_image_matrix.npy'))
+            k_word2vec = compute_distances.find_k_pca(np.load('affinity_matrices/' + self.paraphrase + '_word2vec_matrix.npy'))
+            k = int((k_image + k_word2vec)/2)
+            __ = octave.run_MultiNMF(k, inputfile, outputfile, image_weight)
             result_contents = sio.loadmat(outputfile)
             v_centroid = result_contents['V_centroid']
             y_pps = np.argmax(v_centroid, axis=1)
@@ -480,10 +485,13 @@ class TargetParaphrases:
                     for value in self.sense_clustering[key]:
                         output_clusters[value] = set([key])
 
-                #print(results)
-                ground_truth_clusters = bcubed_evaluation.get_ground_truth_clusters()
+
+                ground_truth_clusters = bcubed_evaluation.get_wordnet_clusters('function', 'n')
+                mappings = bcubed_evaluation.get_wordnet_mappings(ground_truth_clusters, self.paraphrase)
+                ground_truth_clusters = bcubed_evaluation.cull_ground_truth_clusters(ground_truth_clusters, mappings[0])
+                ground_truth_clusters = bcubed_evaluation.formatted_ground_truth_clusters(ground_truth_clusters)
                 results = bcubed_evaluation.eval(ground_truth_clusters, output_clusters)
-                print(results)
+                #return [output_clusters, results] #ADDED THIS
 
                 fout.write("%s ||| %s ||| %s\n"
                            % (outpos, self.baseword,
@@ -590,15 +598,92 @@ def write_json(ppsets, outdir, methodprefix=''):
             print >> fout, json.dumps(outobj)
 
 
+def get_multiview_clusters(paraphrase, part_of_speech, image_weight=0.5):
+    imgfile = 'affinity_matrices/' + paraphrase + '_image_matrix.npy'
+    w_file = 'affinity_matrices/' + paraphrase + '_word2vec_matrix.npy'
+    tp = TargetParaphrases(paraphrase, 'NN', paraphrase)
+    tp.cluster(imgfile=imgfile, w2vfile=w_file, image_weight=image_weight)
+
+    output_clusters = {}
+    for key in tp.sense_clustering.keys():
+        for value in tp.sense_clustering[key]:
+            output_clusters[value] = set([key])
+
+    return output_clusters
+
+    #tp.write('output', ignoresyns=True)
+
+def train_weights(training_set):
+    image_variances = []
+    best_image_weights = [0] * len(training_set)
+    part_of_speech = 'n'
+
+    possible_image_weights = np.arange(0, 1.05, 0.05)
+
+    num_iters = 0
+    total_iters = len(possible_image_weights)* len(training_set)
+
+    for i in range(0, len(training_set)):
+        ground_truth_clusters = bcubed_evaluation.get_wordnet_clusters(training_set[i], part_of_speech)
+        mappings = bcubed_evaluation.get_wordnet_mappings(ground_truth_clusters, training_set[i])
+        ground_truth_clusters = bcubed_evaluation.cull_ground_truth_clusters(ground_truth_clusters, mappings[0])
+        ground_truth_clusters = bcubed_evaluation.formatted_ground_truth_clusters(ground_truth_clusters)
+        imgfile = 'affinity_matrices/' + training_set[i] + '_image_matrix.npy'
+        w_file = 'affinity_matrices/' + training_set[i] + '_word2vec_matrix.npy'
+        tp = TargetParaphrases(training_set[i], 'NN', training_set[i])
+        tp.cluster(imgfile=imgfile, w2vfile=w_file)
+        image_variances.append(np.var(np.load('affinity_matrices/' + training_set[i] + '_image_matrix.npy')))
+        max_bcubed = 0
+        for j in range(0, len(possible_image_weights)):
+            output_clusters = get_multiview_clusters(training_set[i], 'n', possible_image_weights[j])
+            results = bcubed_evaluation.eval(output_clusters, ground_truth_clusters)
+            if results[2] > max_bcubed:
+                max_bcubed = results[2]
+                best_image_weights[i] = possible_image_weights[j]
+            print('Progress: ' + str(num_iters+1) + '/' + str(total_iters))
+            num_iters = num_iters + 1
+
+    print(image_variances)
+    print(best_image_weights)
+
+    logistic_regression = LogisticRegression()
+    logistic_regression.fit(np.asarray(image_variances).reshape(len(image_variances), 1), np.asarray(best_image_weights, dtype="|S6"))
+
+    #save model
+    with open('logistic_regression.pkl', 'wb') as fd:
+        pkl.dump(logistic_regression, fd)
+
+
+
+
+    #print(possible_image_weights)
+    part_of_speech = 'n'
+
 
 '''
 def cluster(self, inc_pp_pp=False, inc_pp_syn=False, inc_pp_sent=False,
             inc_pp_trans=False, inc_pp_distrib=False, inc_pp_images=True,
             inc_pp_word2vec=True, fileprefix='.', choosek='silhouette'):
-    '''
+'''
+
 if __name__== '__main__':
-    imgfile = 'computed_distances.npy'
-    w_file = 'word2vec_similarities.npy'
-    tp = TargetParaphrases('bug','NN')
-    tp.cluster(imgfile=imgfile, w2vfile=w_file)
-    tp.write('output', ignoresyns = True)
+    training_set = ['bank', 'break', 'note', 'mind', 'market']
+    #train_weights(training_set)
+    '''
+    temp1 = [0.0030029454443360514, 0.00074228645965815614, 0.0059916482423711896, 0.0021663209795356937,
+             0.0031185706080825897]
+    temp2 = [0.050000000000000003, 0.60000000000000009, 0.75, 0.40000000000000002, 0.0]
+    logistic_regression = LogisticRegression()
+    logistic_regression.fit(np.asarray(temp1).reshape(len(temp1), 1), np.asarray(temp2, dtype="|S6"))
+
+    # save model
+    with open('logistic_regression.pkl', 'wb') as fd:
+        pkl.dump(logistic_regression, fd)
+    '''
+
+    #print(get_multiview_clusters('break', 'n'))
+    #imgfile = 'function_image_matrix.npy'
+    #w_file = 'function_word2vec_matrix.npy'
+    #tp = TargetParaphrases('bug','NN')
+    #tp.cluster(imgfile=imgfile, w2vfile=w_file)
+    #tp.write('output', ignoresyns = True)
