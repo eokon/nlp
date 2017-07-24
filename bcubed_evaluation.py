@@ -18,30 +18,6 @@ from nltk.corpus import wordnet as wn
 import compute_distances
 
 
-bug_mappings = {
-    'failure': 0,
-    'mosquito': 1,
-    'cockroach': 2,
-    'parasite': 3,
-    'bacterium': 4,
-    'wire': 5,
-    'pest': 6,
-    'glitch': 7,
-    'virus': 8,
-    'error': 9,
-    'microphone': 10,
-    'microbe': 11,
-    'insect': 12,
-    'beetle': 13,
-    'malfunction': 14,
-    'informer': 15,
-    'tracker': 16,
-    'mistake': 17,
-    'snitch': 18,
-    'fault': 19,
-}
-
-
 def get_ground_truth_clusters(): #returns a dictionary of clusters
     clusters = {}
 
@@ -54,7 +30,6 @@ def get_ground_truth_clusters(): #returns a dictionary of clusters
         clusters[paraphrase] = cluster
 
     remove_extraneous_paraphrases(clusters)
-    #print(clusters)
     modified_clusters = condense_clusters(clusters)
 
     #for key in modified_clusters:
@@ -73,7 +48,6 @@ def remove_extraneous_paraphrases(clusters):
             if value not in bug_mappings:
                 temp_list.remove(value)
 
-        #print(temp_list)
         clusters[key] = set(temp_list)
 
 
@@ -118,7 +92,8 @@ def get_ground_truth_clusters_helper(paraphrase, part_of_speech): #returns of a 
     cluster = set()
     
     #add all syns and lemmas of syns to cluster
-    for syn in wn.synsets(paraphrase, pos = part_of_speech):
+    for syn in wn.synsets(paraphrase, pos =
+    part_of_speech):
         cluster.add(syn)
         cluster |= set(list(syn.lemmas()))
 
@@ -147,9 +122,9 @@ def get_ground_truth_clusters_helper(paraphrase, part_of_speech): #returns of a 
     return cluster
 
 
-def get_ground_truth_clusters_old(paraphrase, part_of_speech):
+def get_wordnet_clusters(paraphrase, part_of_speech):
     # retrieve synsets for bug (noun)
-    wn.synsets('bug', 'n')
+    wn.synsets('affair', 'n')
 
     # retrieve lemmas for all synsets of bug, store in a dict
     syn_lems = {}
@@ -165,37 +140,109 @@ def get_ground_truth_clusters_old(paraphrase, part_of_speech):
             temp |= set([l.name() for l in hyper.lemmas()])
         syn_lems[syn.name().split('.')[0]] = temp
 
-
-
-    # The result of the above would be a dict encoding the
-    # gold sense clusters for your target word ( in this case bug).
-    #
+    for key in syn_lems:
+        temp_list = list(syn_lems[key])
+        for value in temp_list:
+            if '_' in value:
+                syn_lems[key].remove(value)
 
     return syn_lems
 
-def get_output_clusters():
+def get_wordnet_mappings(syn_lems, paraphrase):
+    superset_mappings = {}
+    line_mappings = {}
+
+    mappings = {}
+
+    for key in syn_lems:
+        superset_mappings[key] = None
+        line_mappings[key] = None
+        for value in syn_lems[key]:
+            superset_mappings[value] = None
+            line_mappings[value] = None
+
+    word_mapping_keys = line_mappings.keys()
+
+    dir = os.listdir('english_supersets')
+    #print(dir)
+    #os.listdir('english_supersets')
+    for file_name in dir:
+        #print('english_supersets/' + filpickle.dump(model, open(filename, 'wb'))e_name)
+        with open('english_supersets/' + file_name) as file:
+            for num, line in enumerate(file, 1):
+                #print(line)
+                for key in word_mapping_keys:
+                    if key == line.strip():
+                        superset_mappings[key] = file_name
+                        line_mappings[key] = num-1
+                        mappings[key] = superset_mappings[key] + '/' + str(line_mappings[key])
+
+    '''
+    with open('script_' + paraphrase + '.txt', 'w') as file:
+        prefix = 'scp -r edidiong@nlpgrid.seas.upenn.edu:/nlp/data/bcal/features/alexnet/English-'
+        superset_index = len('english.superset')
+
+        for key in mappings.keys():
+            suffix = ' features/' + paraphrase + '/' + key
+            file.write(prefix + mappings[key][superset_index:] + suffix + '\n')
+
+        file.close()
+    '''
+
+    return [superset_mappings, line_mappings, mappings]
+
+def get_ssh_script(paraphrase, mappings):
+    with open('script_' + paraphrase + '.txt', 'w') as file:
+        prefix = 'scp -r edidiong@nlpgrid.seas.upenn.edu:/nlp/data/bcal/features/alexnet/English-'
+        superset_index = len('english.superset')
+
+        for key in mappings.keys():
+            suffix = ' features/' + paraphrase + '/' + key
+            file.write(prefix + mappings[key][superset_index:] + suffix + '\n')
+
+        file.close()
+
+def get_output_clusters(images_matrix, word2vec_matrix, paraphrase):
     dict_images= {}
     dict_word2vec = {}
-    y_images = compute_distances.spectral_clustering(compute_distances.images_matrix)
-    y_word2vec = compute_distances.spectral_clustering(compute_distances.word2vec_matrix)
+    y_images = compute_distances.spectral_clustering(images_matrix)
+    y_word2vec = compute_distances.spectral_clustering(word2vec_matrix)
+
+    all_dirs = os.listdir('features/' + paraphrase)
+    mappings = {}
+
+    for i in range(0, len(all_dirs)):
+        mappings[i] = all_dirs[i]
 
     for i in range(0, len(y_images)):
         if i in dict_images or i in dict_word2vec:
-            dict_images[i] = set.add(y_images[i])
-            dict_word2vec[i] = set.add(y_word2vec[i])
+            dict_images[mappings[i]] = set.add(y_images[i])
+            dict_word2vec[mappings[i]] = set.add(y_word2vec[i])
         else:
-            dict_images[i] = set([y_images[i]])
-            dict_word2vec[i] = set([y_word2vec[i]])
-
-    temp_dict = {v: k for k, v in bug_mappings.items()}
-    values = bug_mappings.values()  # numbers
-
-    for value in values: #change number keys to word keys
-        dict_images[temp_dict[value]] = dict_images.pop(value)
-        dict_word2vec[temp_dict[value]] = dict_word2vec.pop(value)
-
+            dict_images[mappings[i]] = set([y_images[i]])
+            dict_word2vec[mappings[i]] = set([y_word2vec[i]])
 
     return [dict_images, dict_word2vec]
+
+
+def cull_ground_truth_clusters(ground_truth_clusters, mapping):
+    culled_clusters = ground_truth_clusters.copy()
+    for mapping_key in mapping.keys():
+        if mapping[mapping_key] == None:
+            for cluster_key in ground_truth_clusters.keys():
+                temp_set = culled_clusters[cluster_key].copy()
+                temp_set.discard(mapping_key)
+                culled_clusters[cluster_key] = temp_set
+    return culled_clusters
+
+def formatted_ground_truth_clusters(ground_truth_clusters):
+    formatted_ground_truth_clusters = {}
+    i = 0
+    for key in ground_truth_clusters.keys():
+        for value in ground_truth_clusters[key]:
+            formatted_ground_truth_clusters[value] = {i}
+        i = i + 1
+    return formatted_ground_truth_clusters
 
 
 def eval(ground_truth_clusters, output_clusters):
@@ -205,12 +252,20 @@ def eval(ground_truth_clusters, output_clusters):
 
     return [precision, recall, fscore]
 
-
 if __name__== '__main__':
-    '''
-    ground_truth_clusters = get_ground_truth_clusters()
 
-    [output_clusters_images, output_clusters_word2vec]= get_output_clusters()
+    paraphrase = 'function'
+
+    images_matrix = np.load('function_image_matrix.npy')
+    word2vec_matrix = np.load('function_word2vec_matrix.npy')
+
+    ground_truth_clusters = get_wordnet_clusters(paraphrase, 'n')
+    mappings = get_wordnet_mappings(ground_truth_clusters, paraphrase)
+    ground_truth_clusters = cull_ground_truth_clusters(ground_truth_clusters, mappings[0])
+    ground_truth_clusters = formatted_ground_truth_clusters(ground_truth_clusters)
+
+    [output_clusters_images, output_clusters_word2vec] = get_output_clusters(images_matrix, word2vec_matrix, paraphrase)
+
     results_images = eval(output_clusters_images, ground_truth_clusters)
     results_word2vec = eval(output_clusters_word2vec, ground_truth_clusters)
 
@@ -221,5 +276,21 @@ if __name__== '__main__':
     print('------------------------------------')
     print(results_images)
     print(results_word2vec)
+
+    print(len(ground_truth_clusters.items()))
+    print(len(output_clusters_images.items()))
+
+
+
     '''
-    print(get_ground_truth_clusters_old('bug', 'n'))
+    clusters = get_wordnet_clusters(paraphrase, 'n')
+    mappings = get_wordnet_mappings(clusters, paraphrase)
+    mappings_index2 = mappings[2]
+
+
+    print(mappings[0])
+    print(mappings[1])
+    print(mappings[2])
+    print(clusters)
+    print(culled_clusters)
+    '''
