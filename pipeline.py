@@ -3,6 +3,7 @@ import pickle
 import PIL
 from PIL import Image
 import gzip
+import copy
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import spatial
@@ -21,12 +22,13 @@ import re
 import compute_distances
 import bcubed_evaluation
 import multiview_clustering
-
+from io import StringIO
+import pandas
 
 
 '''
     1. Manually create folder for paraphrase
-    2. Produce a script by running gather_images_features(parapaphrase, part_of_speech
+    2. Produce a script by running gather_images_features(parapaphrase, part_of_speech)
     3. Run the script with bash
 '''
 def gather_image_features(paraphrase, part_of_speech):
@@ -41,6 +43,33 @@ def get_matrices(paraphrase):
     compute_distances.get_image_matrix(paraphrase)
     compute_distances.get_word2vec_matrix(paraphrase)
 
+
+def get_all_affinity_matrices():
+    all_dirs = os.listdir('features/')
+    num_words = len(all_dirs)
+    curr_progress = 1
+
+    for dir in all_dirs[29:]:
+        get_matrices(dir)
+        print(str(curr_progress) + ' word(s) completed.')
+        curr_progress += 1
+
+def get_concreteness_map():
+    all_words = os.listdir('features/')
+    concreteness_ratings = pandas.read_excel('Concreteness_ratings_Brysbaert_et_al_BRM.xlsx')
+    concreteness_ratings = concreteness_ratings.as_matrix()
+    concreteness_vocab = [row[0] for row in concreteness_ratings]
+
+    concreteness_map = {}
+
+    # Create map of form {key = word, value = [concreteness_mean, concreteness_SD]}
+    for i in range(0, len(concreteness_vocab)):
+        for j in range(0, len(all_words)):
+            if concreteness_vocab[i] == all_words[j]:
+                concreteness_map[all_words[j]] = [concreteness_ratings[i][2], concreteness_ratings[i][3]]
+
+    return concreteness_map
+
 '''
     Returns clusters from clustering algorithms
 '''
@@ -48,14 +77,23 @@ def get_clusters(paraphrase, part_of_speech):
     images_matrix = np.load('affinity_matrices/' + paraphrase + '_image_matrix.npy') #this must be precomputed
     word2vec_matrix = np.load('affinity_matrices/' + paraphrase + '_word2vec_matrix.npy') #this must be precomputed
 
-    '''
-    with open('logistic_regression.pkl', 'rb') as fd:
-        logistic_regression = pkl.load(fd)
 
-    variance = [np.var(images_matrix)]
-    variance = np.asarray(variance).reshape(len(variance), 1)
-    probabilities = logistic_regression.predict_proba(variance)
-    '''
+    concreteness_map = get_concreteness_map()
+    #'''
+
+    with open('linear_regression.pkl', 'rb') as fd:
+        linear_regression = pkl.load(fd)
+
+    X = list(concreteness_map[paraphrase])
+    image_variance = np.var(images_matrix)
+    word2vec_variance = np.var(word2vec_matrix)
+    X.append(image_variance)
+    X.append(word2vec_variance)
+    image_weight = linear_regression.predict(X)
+    print('image_weight: ', str(image_weight))
+    #print('prob: ', probabilities)
+    #
+    #'''
 
     ground_truth_clusters = bcubed_evaluation.get_wordnet_clusters(paraphrase, part_of_speech)
     mappings = bcubed_evaluation.get_wordnet_mappings(ground_truth_clusters, paraphrase)
@@ -63,8 +101,9 @@ def get_clusters(paraphrase, part_of_speech):
     ground_truth_clusters = bcubed_evaluation.formatted_ground_truth_clusters(ground_truth_clusters)
 
     [output_clusters_images, output_clusters_word2vec] = bcubed_evaluation.get_output_clusters(images_matrix, word2vec_matrix, paraphrase)
-    output_clusters_multiview = multiview_clustering.get_multiview_clusters(paraphrase, part_of_speech)
+    output_clusters_multiview = multiview_clustering.get_multiview_clusters(paraphrase, part_of_speech, image_weight=image_weight)
     return [ground_truth_clusters, output_clusters_images, output_clusters_word2vec, output_clusters_multiview]
+
 
 '''
     Returns bcubed evaluation for clusters
@@ -132,6 +171,9 @@ def view_clusters(y, y_hat_images, y_hat_word2vec, y_hat_multiview, results_imag
         print(all_results[i])
         print('----------------')
 
+
+
+
 def get_average_results(all_words):
 
     num_words = len(all_words)
@@ -149,9 +191,22 @@ def get_average_results(all_words):
     for word in all_words:
         paraphrase = word
         part_of_speech = 'n'
+        print('paraphrase (debugging): ', paraphrase)
         [y, y_hat_images, y_hat_word2vec, y_hat_multiview] = get_clusters(paraphrase, part_of_speech)
 
+        temp_list = list(y.keys())
+        #for y_key in temp_list:
+        #    if y_key not in y_hat_images.keys():
+        #        y.pop(y_key, None)
+
+
+        print('-------')
+        print(word)
+        print(y)
+        print(y_hat_images)
+        print('-------')
         results_images = get_eval(y_hat_images, y)
+
         results_word2vec = get_eval(y_hat_word2vec, y)
         results_multiview = get_eval(y_hat_multiview, y)
 
@@ -178,7 +233,34 @@ def get_average_results(all_words):
 
 
 if __name__== '__main__':
-    all_words = ['bank', 'break', 'bug', 'charge', 'chip', 'flight', 'function', 'gas', 'market', 'mind', 'note']
+    all_words = os.listdir('features/')
+    #gather_image_features('marvel', 'n')
+    #print(get_all_affinity_matrices())
+
+    #test = np.genfromtxt('Concreteness_ratings_Brysbaert_et_al_BRM.txt', delimiter=' ', dtype=None)
+
+
+    #print(get_average_results(all_words[88:110]))
+
+    '''
+    x = get_clusters(all_words[105], 'n')
+    ground_truth_clusters = bcubed_evaluation.get_wordnet_clusters(all_words[105], 'n')
+    mappings = bcubed_evaluation.get_wordnet_mappings(ground_truth_clusters, all_words[105])
+    ground_truth_clusters = bcubed_evaluation.cull_ground_truth_clusters(ground_truth_clusters, mappings[0])
+    ground_truth_clusters = bcubed_evaluation.formatted_ground_truth_clusters(ground_truth_clusters)
+    print(get_eval(x[3], ground_truth_clusters))
+    '''
+    #print(x[1])
+    #print(x[2])
+    #print(x[3])
+
+    '''
+    all_words = os.listdir('features/')
+    print(all_words)
+    print(len(all_words))
+    print(get_average_results(all_words=all_words))
+    '''
+
 
     '''
     paraphrase = 'break'
@@ -194,6 +276,5 @@ if __name__== '__main__':
 
     view_clusters(y=y, y_hat_images=y_hat_images, y_hat_word2vec=y_hat_word2vec, y_hat_multiview=y_hat_multiview,
                   results_images=results_images, results_word2vec= results_wod2vec, results_multiview=results_multiview)
-    '''
 
-    print(get_average_results(all_words= all_words))
+    '''

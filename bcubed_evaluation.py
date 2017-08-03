@@ -192,7 +192,7 @@ def get_wordnet_mappings(syn_lems, paraphrase):
     return [superset_mappings, line_mappings, mappings]
 
 def get_ssh_script(paraphrase, mappings):
-    with open('script_' + paraphrase + '.txt', 'w') as file:
+    with open('new_scripts/script_' + paraphrase + '.txt', 'w') as file:
         prefix = 'scp -r edidiong@nlpgrid.seas.upenn.edu:/nlp/data/bcal/features/alexnet/English-'
         superset_index = len('english.superset')
 
@@ -235,6 +235,20 @@ def cull_ground_truth_clusters(ground_truth_clusters, mapping):
                 culled_clusters[cluster_key] = temp_set
     return culled_clusters
 
+def pre_eval(output_clusters, ground_truth_clusters):
+    ground_truth_keys = list(ground_truth_clusters.keys())
+    output_keys = list(output_clusters.keys())
+
+    for key in ground_truth_keys:
+        if key not in output_keys:
+            ground_truth_clusters.pop(key, None)
+
+    ground_truth_keys = list(ground_truth_clusters.keys())
+
+    for key in output_keys:
+        if key not in ground_truth_keys:
+            output_clusters.pop(key, None)
+
 def formatted_ground_truth_clusters(ground_truth_clusters):
     formatted_ground_truth_clusters = {}
     i = 0
@@ -245,11 +259,10 @@ def formatted_ground_truth_clusters(ground_truth_clusters):
     return formatted_ground_truth_clusters
 
 
-def eval(ground_truth_clusters, output_clusters):
+def eval(output_clusters, ground_truth_clusters):
     precision = bcubed.precision(output_clusters, ground_truth_clusters)
     recall = bcubed.recall(output_clusters, ground_truth_clusters)
     fscore = bcubed.fscore(precision, recall)
-
     return [precision, recall, fscore]
 
 if __name__== '__main__':

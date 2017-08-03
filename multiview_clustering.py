@@ -5,27 +5,25 @@ import json
 import numpy as np
 import scipy.io as sio
 from oct2py import octave
-
 from sklearn.preprocessing import normalize
 from sklearn.metrics import silhouette_score
 from copy import deepcopy
 from nltk.stem.wordnet import WordNetLemmatizer
 import pickle as pkl
-
 #from word_pos import *
 from clus_nmi import nmi
 from clus_bcubed import score_bcubed
 #from wn import WN
 #from utils import read_sents
-
 from nltk.corpus import wordnet
-
 #import addcos
 #from settings import SETTINGS
 from sklearn.linear_model import LogisticRegression
-
+import pandas
 import compute_distances
 import bcubed_evaluation
+from sklearn import linear_model, datasets
+import pipeline
 
 bug_list = [
     'failure',
@@ -428,7 +426,10 @@ class TargetParaphrases:
             #k = min(max(2, len(imgfile[0]) - 1), len(wordnet.synsets(self.baseword, poslookup[self.pos[0]])))
             k_image = compute_distances.find_k_pca(np.load('affinity_matrices/' + self.paraphrase + '_image_matrix.npy'))
             k_word2vec = compute_distances.find_k_pca(np.load('affinity_matrices/' + self.paraphrase + '_word2vec_matrix.npy'))
+            #k = int((k_image*image_weight + k_word2vec*(1-image_weight))/2)
             k = int((k_image + k_word2vec)/2)
+            if k == 0: #error trap
+                k = 1
             __ = octave.run_MultiNMF(k, inputfile, outputfile, image_weight)
             result_contents = sio.loadmat(outputfile)
             v_centroid = result_contents['V_centroid']
@@ -445,6 +446,7 @@ class TargetParaphrases:
         self.pp_clus_probs = bestresult['V_centroid']
         self.pp_clus_assignments = dict(zip(self.paraphrases, best_y)) #replaced "self.paraphrases" with "imgfile[0]"
         self.all_assignments = self.pp_clus_assignments
+        print("error check best_k: ", best_k)
         self.sense_clustering = {clusnum: list(np.array(self.paraphrases)[best_y == clusnum])
                                  for clusnum in range(best_k)}
         self.sense_clustering = {i: v for i, v in enumerate(self.sense_clustering.values()) if len(v) > 0}
@@ -613,8 +615,8 @@ def get_multiview_clusters(paraphrase, part_of_speech, image_weight=0.5):
 
     #tp.write('output', ignoresyns=True)
 
-def train_weights(training_set):
-    image_variances = []
+def train_weights(training_set, filename = 'model'):
+    X = []
     best_image_weights = [0] * len(training_set)
     part_of_speech = 'n'
 
@@ -623,7 +625,10 @@ def train_weights(training_set):
     num_iters = 0
     total_iters = len(possible_image_weights)* len(training_set)
 
+    concreteness_map = pipeline.get_concreteness_map()
+
     for i in range(0, len(training_set)):
+        #print('Debugging: ', training_set[i])
         ground_truth_clusters = bcubed_evaluation.get_wordnet_clusters(training_set[i], part_of_speech)
         mappings = bcubed_evaluation.get_wordnet_mappings(ground_truth_clusters, training_set[i])
         ground_truth_clusters = bcubed_evaluation.cull_ground_truth_clusters(ground_truth_clusters, mappings[0])
@@ -632,10 +637,27 @@ def train_weights(training_set):
         w_file = 'affinity_matrices/' + training_set[i] + '_word2vec_matrix.npy'
         tp = TargetParaphrases(training_set[i], 'NN', training_set[i])
         tp.cluster(imgfile=imgfile, w2vfile=w_file)
-        image_variances.append(np.var(np.load('affinity_matrices/' + training_set[i] + '_image_matrix.npy')))
+        variance_images = np.var(np.load('affinity_matrices/' + training_set[i] + '_image_matrix.npy'))
+        variance_word2vec = np.var(np.load('affinity_matrices/' + training_set[i] + '_word2vec_matrix.npy'))
+        temp_X = list(concreteness_map[training_set[i]])
+        temp_X.append(variance_images)
+        temp_X.append(variance_word2vec)
+        #print(type(concreteness_map[training_set[i]]))
+        #print(type(variance_images))
+        #print(type(temp_X))
+
+        X.append(temp_X)
         max_bcubed = 0
         for j in range(0, len(possible_image_weights)):
             output_clusters = get_multiview_clusters(training_set[i], 'n', possible_image_weights[j])
+            temp_list = list(ground_truth_clusters.keys())
+            #for y_key in temp_list:
+            #    if y_key not in output_clusters.keys():
+            #        ground_truth_clusters.pop(y_key, None)
+            #print('ground_truth_clusters: ', ground_truth_clusters)
+            #print('output_clusters: ', output_clusters)
+            #print('--------------')
+            bcubed_evaluation.pre_eval(output_clusters, ground_truth_clusters)
             results = bcubed_evaluation.eval(output_clusters, ground_truth_clusters)
             if results[2] > max_bcubed:
                 max_bcubed = results[2]
@@ -643,18 +665,16 @@ def train_weights(training_set):
             print('Progress: ' + str(num_iters+1) + '/' + str(total_iters))
             num_iters = num_iters + 1
 
-    print(image_variances)
-    print(best_image_weights)
+    #print(image_variances)
+    #print(best_image_weights)
 
-    logistic_regression = LogisticRegression()
-    logistic_regression.fit(np.asarray(image_variances).reshape(len(image_variances), 1), np.asarray(best_image_weights, dtype="|S6"))
+    linear_regression = linear_model.LinearRegression()
+    linear_regression.fit(np.asarray(X), np.asarray(best_image_weights))
+    #linear_regression.fit(np.asarray(X).reshape(len(X), 1), np.asarray(best_image_weights, dtype="|S6"))
 
     #save model
-    with open('logistic_regression.pkl', 'wb') as fd:
-        pkl.dump(logistic_regression, fd)
-
-
-
+    with open(filename + '.pkl', 'wb') as fd:
+        pkl.dump(linear_regression, fd)
 
     #print(possible_image_weights)
     part_of_speech = 'n'
@@ -666,15 +686,47 @@ def cluster(self, inc_pp_pp=False, inc_pp_syn=False, inc_pp_sent=False,
             inc_pp_word2vec=True, fileprefix='.', choosek='silhouette'):
 '''
 
+def train_cross_validation_models(num_models, sample_size):
+    all_words = os.listdir('features/')
+    hold_out_size = int(sample_size/num_models)
+
+    for i in range(0, num_models):
+        if i == 0:
+            print('Training model ' + str(i + 1) + ' of ' + str(num_models) + '.')
+            training_set = list(all_words)
+            temp = hold_out_size*i
+            hold_out_set = list(all_words[temp: temp + hold_out_size])
+            training_set = [x for x in training_set if x not in hold_out_set]
+            name = 'linear_model' + str(i+1)
+            train_weights(training_set, filename=name)
+            print('Done training model ' + str(i + 1) + 'cof ' + str(num_models) + '.')
+
+def test_cross_validation_models(num_models, sample_size):
+    all_words = os.listdir('features/')
+    hold_out_size = int(sample_size / num_models)
+
+    for i in range(0, num_models):
+        training_set = list(all_words)
+        temp = hold_out_size * i
+        hold_out_set = list(all_words[temp: temp + hold_out_size])
+        training_set = [x for x in training_set if x not in hold_out_set]
+
+
+
+
+
 if __name__== '__main__':
-    training_set = ['bank', 'break', 'note', 'mind', 'market']
+    all_words = os.listdir('features/')
+    #training_set = all_words[:88]
+
+    #concreteness_map = pipeline.get_concreteness_map()
+    train_cross_validation_models(5, len(all_words))
+
+    #print(concreteness_map)
     #train_weights(training_set)
+
+
     '''
-    temp1 = [0.0030029454443360514, 0.00074228645965815614, 0.0059916482423711896, 0.0021663209795356937,
-             0.0031185706080825897]
-    temp2 = [0.050000000000000003, 0.60000000000000009, 0.75, 0.40000000000000002, 0.0]
-    logistic_regression = LogisticRegression()
-    logistic_regression.fit(np.asarray(temp1).reshape(len(temp1), 1), np.asarray(temp2, dtype="|S6"))
 
     # save model
     with open('logistic_regression.pkl', 'wb') as fd:

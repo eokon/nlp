@@ -95,7 +95,7 @@ def get_word2vec_matrix(paraphrase):
     not_in_vocab = set()
     sum_of_included = 0
     num_included_in_vocab = 0
-    average_included = 0
+    avg_included = 0
 
     for i in range(0, num_paraphrases):
         for j in range(0, num_paraphrases):
@@ -103,7 +103,7 @@ def get_word2vec_matrix(paraphrase):
                 word2vec_similarities[i,j] = model.similarity(all_dirs[i], all_dirs[j])
             else:
                 not_in_vocab.add((i,j))
-            print('Progess: ' + str(progress) + '/' + str(num_paraphrases ** 2))
+            #print('Progess: ' + str(progress) + '/' + str(num_paraphrases ** 2))
             progress = progress + 1
 
     for i in range(0, num_paraphrases):
@@ -112,14 +112,18 @@ def get_word2vec_matrix(paraphrase):
                 sum_of_included = sum_of_included + word2vec_similarities[i,j]
                 num_included_in_vocab = num_included_in_vocab + 1
 
-    avg_included = sum_of_included/num_included_in_vocab
+    if num_included_in_vocab > 0:
+        print('Paraphrase not in vocabulary: ', paraphrase)
+        avg_included = sum_of_included/num_included_in_vocab
+    else:
+        avg_included = 0
 
     for point in not_in_vocab:
         word2vec_similarities[point[0], point[1]] = avg_included
 
-    print(sum_of_included)
-    print(num_included_in_vocab)
-    print(avg_included)
+    #print(sum_of_included)
+    #print(num_included_in_vocab)
+    #print(avg_included)
 
     np.save('affinity_matrices/' + paraphrase + '_word2vec_matrix', word2vec_similarities)
 
